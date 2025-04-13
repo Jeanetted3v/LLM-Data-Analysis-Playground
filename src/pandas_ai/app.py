@@ -1,5 +1,7 @@
 """To run:
 chainlit run src/pandas_ai/app.py
+Ref: https://mer.vin/2024/05/pandas-ai-database-excel-chainlit/
+Ref: https://www.youtube.com/watch?v=p53YfWZJt14
 """
 import pandas as pd
 import chainlit as cl

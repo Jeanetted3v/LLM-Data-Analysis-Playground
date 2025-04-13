@@ -25,6 +25,9 @@ chainlit.md
 # exports and charts
 /exports/*
 
+# mac 
+.DS_Store
+
 # Distribution / packaging
 .Python
 build/
