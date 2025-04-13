@@ -1,0 +1,8 @@
+pandasai
+ipykernel
+pandas
+numpy==1.26.4
+openai
+openpyxl
+langchain_groq
+chainlit

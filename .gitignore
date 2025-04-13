@@ -6,6 +6,25 @@ __pycache__/
 # C extensions
 *.so
 
+# data files and folders
+*.db
+/data/*
+/data/raw/*
+!/data/raw/.gitkeep
+
+# requirements files
+requirements.txt
+
+# cache folder
+/cache/*
+
+# chainlit 
+/.chainlit/*
+chainlit.md
+
+# exports and charts
+/exports/*
+
 # Distribution / packaging
 .Python
 build/
