@@ -33,18 +33,16 @@ def excel_to_sqlite(excel_file, db_file, sheet_name=None, table_name=None):
         if len(table_names) != len(sheet_names):
             raise ValueError("Length of table_name must match length of sheet_name")
     
-    # Process each sheet
     for i, (sheet, table) in enumerate(zip(sheet_names, table_names)):
         df = pd.read_excel(excel_file, sheet_name=sheet)
-        # Clean column names
         df.columns = [col.lower().replace(' ', '_').replace('.', '_').replace('-', '_') 
                       for col in df.columns]
-        # Write to SQLite
+
         df.to_sql(table, conn, if_exists='replace', index=False)
         print(f"Imported sheet '{sheet}' to table '{table}' with {len(df)} rows")
     conn.close()
     print(f"Successfully converted {excel_file} to {db_file}")
 
-# Example usage
+
 if __name__ == "__main__":
     excel_to_sqlite("data/raw/test_data.xlsx", "test_data.db")

@@ -7,14 +7,16 @@ import pandas as pd
 import chainlit as cl
 from pandasai import SmartDataframe
 from langchain_groq.chat_models import ChatGroq 
+from pandasai.llm.openai import OpenAI
 import sqlite3
 import os
-print(f"Database exists: {os.path.exists('../test_data.db')}")
 
 llm = ChatGroq(
     model_name="llama3-70b-8192",
     api_key = os.environ["GROQ_API_KEY"]
 )
+
+llm_openai = OpenAI(api_token=os.environ["OPENAI_API_KEY"])
 
 @cl.on_chat_start
 def start_chat():
@@ -41,7 +43,7 @@ async def main(message: cl.Message):
     df = pd.read_sql('SELECT * FROM sheet', conn)
     conn.close()
 
-    df = SmartDataframe(df, config={"llm": llm})
+    df = SmartDataframe(df, config={"llm": llm_openai})
     
     question = message.content
     response = df.chat(question)
