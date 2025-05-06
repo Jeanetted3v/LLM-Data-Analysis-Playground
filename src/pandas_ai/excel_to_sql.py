@@ -45,4 +45,4 @@ def excel_to_sqlite(excel_file, db_file, sheet_name=None, table_name=None):
 
 
 if __name__ == "__main__":
-    excel_to_sqlite("data/raw/test_data.xlsx", "test_data.db")
+    excel_to_sqlite("data/raw/test_data_name_change.xlsx", "test_data_name_change.db")

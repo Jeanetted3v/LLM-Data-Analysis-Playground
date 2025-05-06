@@ -18,6 +18,13 @@ llm = ChatGroq(
 
 llm_openai = OpenAI(api_token=os.environ["OPENAI_API_KEY"])
 
+llm_openai._set_params(
+    model="gpt-4.1-mini",
+    temperature=0.2,
+    max_completion_tokens=2000,
+    stop=None
+)
+
 @cl.on_chat_start
 def start_chat():
     # Set initial message history
@@ -34,19 +41,30 @@ async def main(message: cl.Message):
 
     # Load data
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+
+    # for loading excel data
     # excel_path = os.path.join(project_root, 'data/raw/test_data.xlsx')
     # df = pd.read_excel(excel_path)
-    # df = pd.read_csv('data.csv')
-    db_path = os.path.join(project_root, 'test_data.db')
-    conn = sqlite3.connect(db_path)
 
-    df = pd.read_sql('SELECT * FROM sheet', conn)
-    conn.close()
+    # for loading csv data
+    csv_path = os.path.join(project_root, 'data/processed/test_data.csv')
+    df = pd.read_csv(csv_path)
+
+    # for loading sql data
+    # db_path = os.path.join(project_root, 'test_data_original.db')
+    # conn = sqlite3.connect(db_path)
+
+    # df = pd.read_sql('SELECT * FROM sheet', conn)
+    # conn.close()
 
     df = SmartDataframe(df, config={"llm": llm_openai})
     
     question = message.content
-    response = df.chat(question)
+    full_prompt = "\n".join(
+        [f"{m['role'].capitalize()}: {m['content']}" for m in message_history]
+    )
+    full_prompt += f"\nUser: {question}"
+    response = df.chat(full_prompt)
     msg = cl.Message(content=response)
     
     await msg.send()
