@@ -6,24 +6,23 @@ Ref: https://www.youtube.com/watch?v=p53YfWZJt14
 import pandas as pd
 import chainlit as cl
 from pandasai import SmartDataframe
-from langchain_groq.chat_models import ChatGroq 
-from pandasai.llm.openai import OpenAI
+import pandasai as pai
+from pandasai_litellm import LiteLLM
 import sqlite3
 import os
+from src.settings import SETTINGS
 
-llm = ChatGroq(
-    model_name="llama3-70b-8192",
-    api_key = os.environ["GROQ_API_KEY"]
-)
 
-llm_openai = OpenAI(api_token=os.environ["OPENAI_API_KEY"])
-
-llm_openai._set_params(
-    model="gpt-4.1-mini",
-    temperature=0.2,
-    max_completion_tokens=2000,
-    stop=None
-)
+os.environ["OPENAI_API_KEY"] = SETTINGS.OPENAI_API_KEY
+llm = LiteLLM(model="gpt-4.1-mini")
+pai.config.set({
+   "llm": llm,
+   "temperature": 0,
+   "seed": 26,
+   "save_logs": True,
+   "verbose": True,
+   "max_retries": 3
+})
 
 @cl.on_chat_start
 def start_chat():
@@ -57,7 +56,7 @@ async def main(message: cl.Message):
     # df = pd.read_sql('SELECT * FROM sheet', conn)
     # conn.close()
 
-    df = SmartDataframe(df, config={"llm": llm_openai})
+    df = SmartDataframe(df, config={"llm": llm})
     
     question = message.content
     full_prompt = "\n".join(

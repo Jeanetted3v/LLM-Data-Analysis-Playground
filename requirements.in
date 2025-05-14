@@ -1,10 +1,14 @@
 ipykernel
 pandas
+pydantic
+pydantic-settings
+python-dotenv
 numpy==1.26.4
 matplotlib
 openai
 openpyxl
 langchain_groq
-pandasai
+pandasai>=3.0.0b2
+pandasai-litellm
 chainlit
 vanna
