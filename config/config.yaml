@@ -1,0 +1,12 @@
+data_dir: ./data    
+buket_nam: "data_visualize_ai"
+csv_path: "test_data_shopname_lower.csv"
+json_path: "test_data_column.json"
+
+# Model configuration
+llm_model: "gpt-4.1-mini"
+temperature: 0
+seed: 26
+save_logs: true
+verbose: true
+max_retries: 3
