@@ -1,3 +1,9 @@
+.chainlit
+datasets/
+exports/
+chainlit.md
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -15,8 +21,6 @@ __pycache__/
 # notebooks
 *.ipynb
 
-# requirements files
-requirements.txt
 
 # cache folder
 /cache/*
