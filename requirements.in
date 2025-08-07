@@ -12,3 +12,4 @@ pandasai-litellm
 chainlit
 hydra-core
 google-cloud-storage
+scikit-learn

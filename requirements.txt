@@ -189,6 +189,8 @@ jiter==0.9.0
     # via
     #   anthropic
     #   openai
+joblib==1.5.0
+    # via scikit-learn
 jsonschema==4.23.0
     # via litellm
 jsonschema-specifications==2025.4.1
@@ -242,6 +244,7 @@ numpy==1.26.4
     #   pandas
     #   pandasai
     #   pyarrow
+    #   scikit-learn
     #   scipy
     #   seaborn
 omegaconf==2.3.0
@@ -619,8 +622,12 @@ rpds-py==0.24.0
     #   referencing
 rsa==4.9.1
     # via google-auth
+scikit-learn==1.6.1
+    # via -r requirements.in
 scipy==1.10.1
-    # via pandasai
+    # via
+    #   pandasai
+    #   scikit-learn
 seaborn==0.12.2
     # via pandasai
 simple-websocket==1.1.0
@@ -650,6 +657,8 @@ syncer==2.0.3
     # via chainlit
 tenacity==8.5.0
     # via traceloop-sdk
+threadpoolctl==3.6.0
+    # via scikit-learn
 tiktoken==0.9.0
     # via
     #   litellm
