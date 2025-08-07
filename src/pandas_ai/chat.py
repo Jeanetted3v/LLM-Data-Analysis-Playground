@@ -31,6 +31,10 @@ pai.config.set({
 with initialize(version_base=None, config_path="../../config"):
     cfg = compose(config_name="config")
 
+BUCKET_NAME = "data_visualize_ai"
+CSV_PATH = "test_data_shopname_lower.csv"
+JSON_PATH = "test_data_column.json"
+
 @cl.on_chat_start
 def start_chat():
     # Set initial message history
@@ -48,7 +52,7 @@ async def main(message: cl.Message):
     try:
         # Initialize GCS client
         storage_client = storage.Client()
-        bucket = storage_client.bucket(cfg.buket_name)
+        bucket = storage_client.bucket(cfg.bucket_name)
 
         # Download CSV from GCS to temporary storage
         temp_csv_path = "/tmp/test_data.csv"

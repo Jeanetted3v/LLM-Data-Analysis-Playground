@@ -9,4 +9,4 @@ temperature: 0
 seed: 26
 save_logs: true
 verbose: true
-max_retries: 3
+max_retries: 2
