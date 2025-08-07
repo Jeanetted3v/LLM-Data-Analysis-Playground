@@ -13,4 +13,6 @@ COPY . .
 ENV PORT=8080
 
 # Command to run the application
-CMD ["chainlit", "run", "src.pandas_ai.chat.py", "--port", "8080", "--host", "0.0.0.0"]
+# CMD ["chainlit", "run", "src.pandas_ai.chat.py", "--port", "8080", "--host", "0.0.0.0"]
+
+CMD ["chainlit", "run", "src/pandas_ai/chat.py", "--port", "8080", "--host", "0.0.0.0"]
