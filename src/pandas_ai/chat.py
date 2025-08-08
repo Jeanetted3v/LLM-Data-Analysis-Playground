@@ -43,6 +43,7 @@ def start_chat():
         [{"role": "system", "content": "You are a helpful assistant."}],
     )
 
+
 @cl.on_message
 async def main(message: cl.Message):
     # Retrieve message history
