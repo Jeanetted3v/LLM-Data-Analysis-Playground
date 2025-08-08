@@ -2,10 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Install pip-tools (for pip-compile)
+RUN pip install --upgrade pip && pip install pip-tools
+
 # Install dependencies
-COPY requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir --pre -r requirements.txt
+COPY requirements.in .
+RUN pip-compile --generate-hashes --allow-unsafe --pre requirements.in
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 # Copy application code
 COPY . .
