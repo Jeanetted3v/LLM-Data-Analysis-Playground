@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-WORKDIR /app
+WORKDIR /app 
 
 # Install pip-tools (for pip-compile)
 RUN pip install --upgrade pip && pip install pip-tools
