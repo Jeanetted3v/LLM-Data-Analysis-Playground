@@ -3,7 +3,7 @@
 datasets/
 exports/
 chainlit.md
-
+requirements.txt
 
 # Ignore all local configuration
 conf/local/**
