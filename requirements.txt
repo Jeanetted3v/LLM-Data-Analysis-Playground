@@ -498,7 +498,7 @@ pandas==2.2.3
     #   -r requirements.in
     #   pandasai
     #   seaborn
-pandasai==3.0.0b17
+pandasai>=3.0.0b2
     # via
     #   -r requirements.in
     #   pandasai-litellm
