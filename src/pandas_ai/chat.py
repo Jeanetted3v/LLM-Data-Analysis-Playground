@@ -166,62 +166,31 @@ async def main(message: cl.Message):
         to_send_text = None
         path = None
 
-        def _save_and_send_pil(img: PILImage.Image):
-            fname = f"chart_{uuid.uuid4().hex[:8]}.png"
-            fpath = os.path.join(charts_dir, fname)
-            img.save(fpath, format="PNG")
-            return fpath
-
-        def _save_and_send_mpl(fig: Figure):
-            fname = f"chart_{uuid.uuid4().hex[:8]}.png"
-            fpath = os.path.join(charts_dir, fname)
-            fig.savefig(fpath, bbox_inches="tight")
-            return fpath
-
         if isinstance(result, str):
-            path = result
+            path = result.strip()
 
-            # If PandasAI returned a relative path like "exports/charts/xyz.png",
-            # normalize it to our /tmp-based charts_dir.
+            # Normalize PandasAI's relative path to our /tmp charts dir
             if path.startswith("exports/charts/"):
-                path = os.path.join(charts_dir, os.path.basename(path))
+                resolved = os.path.join(charts_dir, os.path.basename(path))
+            else:
+                resolved = path if os.path.isabs(path) else os.path.join(os.getcwd(), path)
 
-            # If it looks like an image and exists, render it
-            if path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")) and os.path.exists(path):
-                await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+            exists = os.path.exists(resolved)
+            logger.info("Chart path raw=%s resolved=%s exists=%s", path, resolved, exists)
+
+            if exists and resolved.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                await cl.Image(name=os.path.basename(resolved), path=resolved, display="inline").send()
             else:
+                # Nothing found on disk: fall back to text
                 to_send_text = result or "(Empty response)"
-        elif isinstance(result, PILImage.Image):
-            path = _save_and_send_pil(result)
-            await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
-        elif isinstance(result, Figure):
-            path = _save_and_send_mpl(result)
-            await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
-        # Sometimes libs return dicts like {"type":"image","path": "..."} or base64 data
-        elif isinstance(result, dict):
-            if "path" in result and isinstance(result["path"], str):
-                path = result["path"]
-                if path.startswith("exports/charts/"):
-                    path = os.path.join(charts_dir, os.path.basename(path))
-                if path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")) and os.path.exists(path):
-                    await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
-                else:
-                    to_send_text = json.dumps(result)
-            elif "image_base64" in result:
-                fname = f"chart_{uuid.uuid4().hex[:8]}.png"
-                path = os.path.join(charts_dir, fname)
-                with open(path, "wb") as f:
-                    f.write(base64.b64decode(result["image_base64"]))
-                await cl.Image(name=fname, path=path, display="inline").send()
-            else:
-                to_send_text = json.dumps(result)
 
         else:
-            # Non-string results: stringify
+            # Non-string results: just show as text for now
             to_send_text = str(result) if result is not None else "(Empty response)"
 
         if to_send_text:
             await cl.Message(content=to_send_text).send()
+
 
         # Keep history consistent (use the same variable you used above)
         message_history.append({"role": "assistant", "content": to_send_text or os.path.basename(path)})
