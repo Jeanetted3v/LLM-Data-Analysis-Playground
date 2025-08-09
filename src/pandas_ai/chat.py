@@ -33,7 +33,7 @@ with initialize(version_base=None, config_path="../../config"):
 
 BUCKET_NAME = "data_visualize_ai"
 CSV_PATH = "test_data_shopname_lower.csv"
-JSON_PATH = "test_data_column.json"
+JSON_PATH = "test_data_columns.json"
 
 @cl.on_chat_start
 def start_chat():
