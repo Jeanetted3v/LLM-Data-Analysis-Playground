@@ -103,13 +103,18 @@ async def main(message: cl.Message):
         logger.info("CSV rows=%s, columns spec fields=%s", getattr(csv_df, "shape", ("?", "?")), len(columns or []))
 
         # Build PandasAI DataFrame (keep your original flow)
-        df = pai.create(
-            path="my-org/companies",
-            df=csv_df,
+        # df = pai.create(
+        #     path="my-org/companies",
+        #     df=csv_df,
+        #     description="Sales data from our retail stores",
+        #     columns=columns,
+        # )
+        df = pai.DataFrame(
+            csv_df,
             description="Sales data from our retail stores",
             columns=columns,
+            config={"llm": llm}
         )
-        df = pai.DataFrame(df, config={"llm": llm})
         logger.info("PandasAI DataFrame created.")
 
         # Prompt
