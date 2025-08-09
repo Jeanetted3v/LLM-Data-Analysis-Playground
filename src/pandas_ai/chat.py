@@ -100,26 +100,39 @@ async def main(message: cl.Message):
         csv_df = pai.read_csv(temp_csv_path)
         with open(temp_json_path, "r") as f:
             columns = json.load(f)
-        logger.info("CSV rows=%s, columns spec fields=%s", getattr(csv_df, "shape", ("?", "?")), len(columns or []))
-
-        # Build PandasAI DataFrame (keep your original flow)
-        # df = pai.create(
-        #     path="my-org/companies",
-        #     df=csv_df,
-        #     description="Sales data from our retail stores",
-        #     columns=columns,
-        # )
-        df = pai.DataFrame(
-            csv_df,
-            description="Sales data from our retail stores",
-            columns=columns,
-            config={"llm": llm}
+        logger.info(
+            "CSV rows=%s, columns spec fields=%s",
+            getattr(csv_df, "shape", ("?", "?")),
+            len(columns or [])
         )
+
+        # Build/Reuse PandasAI DataFrame ONCE per session
+        pandasai_df = cl.user_session.get("pandasai_df")
+        if pandasai_df is None:
+            # Create the dataset (with schema) only once
+            dataset = pai.create(
+                path="my-org/companies",
+                df=csv_df,
+                description="Sales data from our retail stores",
+                columns=columns,
+                # force=True  # uncomment if you want to overwrite an existing registry entry
+            )
+            pandasai_df = pai.DataFrame(dataset, config={"llm": llm})
+            cl.user_session.set("pandasai_df", pandasai_df)
+            logger.info("PandasAI DataFrame created and cached in session.")
+        else:
+            logger.info("Reusing PandasAI DataFrame from session.")
+        df = pandasai_df
         logger.info("PandasAI DataFrame created.")
 
         # Prompt
+        message_history = cl.user_session.get("message_history")
         question = message.content
-        full_prompt = "\n".join(f"{m['role'].capitalize()}: {m['content']}" for m in history) + f"\nUser: {question}"
+        full_prompt = "\n".join(
+            f"{m['role'].capitalize()}: {m['content']}"
+            for m in message_history
+        ) + f"\nUser: {question}"
+        
         await cl.Message("Calling the model…").send()
         logger.info("Calling df.chat()…")
 
