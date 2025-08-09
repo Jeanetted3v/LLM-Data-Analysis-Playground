@@ -13,6 +13,7 @@ from pandasai import SmartDataframe
 import pandasai as pai
 from pandasai_litellm import LiteLLM
 import os
+import tempfile
 import time
 import asyncio
 from google.cloud import storage
@@ -28,13 +29,19 @@ else:
     logger.info("OPENAI_API_KEY loaded (prefix): %s******", SETTINGS.OPENAI_API_KEY[:6])
 os.environ["OPENAI_API_KEY"] = SETTINGS.OPENAI_API_KEY
 llm = LiteLLM(model="gpt-4.1-mini", request_timeout=45)
+
+charts_dir = os.path.join(tempfile.gettempdir(), "exports", "charts")
+os.makedirs(charts_dir, exist_ok=True)
+
 pai.config.set({
    "llm": llm,
    "temperature": 0,
    "seed": 26,
    "save_logs": True,
    "verbose": True,
-   "max_retries": 3
+   "max_retries": 3,
+   "save_charts": True,
+   "save_charts_path": charts_dir,
 })
 
 with initialize(version_base=None, config_path="../../config"):
@@ -132,7 +139,7 @@ async def main(message: cl.Message):
             f"{m['role'].capitalize()}: {m['content']}"
             for m in message_history
         ) + f"\nUser: {question}"
-        
+
         await cl.Message("Calling the model…").send()
         logger.info("Calling df.chat()…")
 
@@ -147,16 +154,37 @@ async def main(message: cl.Message):
                 logger.info("df.chat() elapsed: %.2fs", time.time() - t)
 
         try:
-            response = await asyncio.wait_for(loop.run_in_executor(None, _call_chat), timeout=60)
+            result = await asyncio.wait_for(loop.run_in_executor(None, _call_chat), timeout=60)
         except asyncio.TimeoutError:
             raise RuntimeError("Model call timed out after 60s. Check outbound internet / VPC egress / API quotas.")
 
-        if not response:
-            response = "(Empty response)"
-        await cl.Message(content=response).send()
+        # --- Handle charts vs text ---
+        to_send_text = None
 
-        history.append({"role": "assistant", "content": response})
-        # Chainlit auto-update not needed here; sending once is fine.
+        if isinstance(result, str):
+            path = result
+
+            # If PandasAI returned a relative path like "exports/charts/xyz.png",
+            # normalize it to our /tmp-based charts_dir.
+            if path.startswith("exports/charts/"):
+                path = os.path.join(charts_dir, os.path.basename(path))
+
+            # If it looks like an image and exists, render it
+            if path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")) and os.path.exists(path):
+                await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+            else:
+                to_send_text = result or "(Empty response)"
+
+        else:
+            # Non-string results: stringify
+            to_send_text = str(result) if result is not None else "(Empty response)"
+
+        if to_send_text:
+            await cl.Message(content=to_send_text).send()
+
+        # Keep history consistent (use the same variable you used above)
+        message_history.append({"role": "assistant", "content": to_send_text or os.path.basename(path)})
+        cl.user_session.set("message_history", message_history)
 
     except Exception as e:
         logger.exception("Error in handler")
