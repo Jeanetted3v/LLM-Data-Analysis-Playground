@@ -16,6 +16,10 @@ import os
 import tempfile
 import time
 import asyncio
+from PIL import Image as PILImage
+from matplotlib.figure import Figure
+import uuid
+import base64
 from google.cloud import storage
 from src.utils.settings import SETTINGS
 from hydra import compose, initialize
@@ -160,6 +164,19 @@ async def main(message: cl.Message):
 
         # --- Handle charts vs text ---
         to_send_text = None
+        path = None
+
+        def _save_and_send_pil(img: PILImage.Image):
+            fname = f"chart_{uuid.uuid4().hex[:8]}.png"
+            fpath = os.path.join(charts_dir, fname)
+            img.save(fpath, format="PNG")
+            return fpath
+
+        def _save_and_send_mpl(fig: Figure):
+            fname = f"chart_{uuid.uuid4().hex[:8]}.png"
+            fpath = os.path.join(charts_dir, fname)
+            fig.savefig(fpath, bbox_inches="tight")
+            return fpath
 
         if isinstance(result, str):
             path = result
@@ -174,6 +191,30 @@ async def main(message: cl.Message):
                 await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
             else:
                 to_send_text = result or "(Empty response)"
+        elif isinstance(result, PILImage.Image):
+            path = _save_and_send_pil(result)
+            await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+        elif isinstance(result, Figure):
+            path = _save_and_send_mpl(result)
+            await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+        # Sometimes libs return dicts like {"type":"image","path": "..."} or base64 data
+        elif isinstance(result, dict):
+            if "path" in result and isinstance(result["path"], str):
+                path = result["path"]
+                if path.startswith("exports/charts/"):
+                    path = os.path.join(charts_dir, os.path.basename(path))
+                if path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")) and os.path.exists(path):
+                    await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+                else:
+                    to_send_text = json.dumps(result)
+            elif "image_base64" in result:
+                fname = f"chart_{uuid.uuid4().hex[:8]}.png"
+                path = os.path.join(charts_dir, fname)
+                with open(path, "wb") as f:
+                    f.write(base64.b64decode(result["image_base64"]))
+                await cl.Image(name=fname, path=path, display="inline").send()
+            else:
+                to_send_text = json.dumps(result)
 
         else:
             # Non-string results: stringify
