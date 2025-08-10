@@ -46,6 +46,10 @@ pai.config.set({
    "save_charts_path": charts_dir,
 })
 
+logger.info("PandasAI config - charts_dir: %s", charts_dir)
+logger.info("Current working directory: %s", os.getcwd())
+logger.info("Charts directory exists: %s", os.path.exists(charts_dir))
+
 with initialize(version_base=None, config_path="../../config"):
     cfg = compose(config_name="config")
 
@@ -160,6 +164,8 @@ async def main(message: cl.Message):
         except asyncio.TimeoutError:
             raise RuntimeError("Model call timed out after 60s. Check outbound internet / VPC egress / API quotas.")
 
+        logger.info("Result type: %s, content: %s", type(result).__name__, str(result)[:200])
+
         # --- Handle charts vs text ---
         to_send_text = None
         path = None
@@ -178,16 +184,33 @@ async def main(message: cl.Message):
 
         def _resolve_chart_path(raw_path):
             """Resolve and normalize chart paths from PandasAI"""
+            possible_paths = []
+            
             # Handle relative paths starting with exports/charts/
             if raw_path.startswith("exports/charts/"):
-                # Use the configured charts_dir, not tempfile.gettempdir()
-                resolved = os.path.join(charts_dir, os.path.basename(raw_path))
+                filename = os.path.basename(raw_path)
+                # Try multiple possible locations
+                possible_paths = [
+                    os.path.join(charts_dir, filename),  # Our configured temp dir
+                    os.path.join(os.getcwd(), raw_path),  # Relative to current working dir
+                    os.path.join("/tmp", raw_path),  # Common temp location
+                    raw_path,  # Try the raw path as-is
+                ]
             else:
                 # Handle absolute paths or other relative paths
-                resolved = raw_path if os.path.isabs(raw_path) else os.path.join(os.getcwd(), raw_path)
+                possible_paths = [
+                    raw_path if os.path.isabs(raw_path) else os.path.join(os.getcwd(), raw_path)
+                ]
             
-            logger.info("Chart path raw='%s' resolved='%s' exists=%s", raw_path, resolved, os.path.exists(resolved))
-            return resolved
+            # Find the first path that exists
+            for path in possible_paths:
+                if os.path.exists(path):
+                    logger.info("Chart path raw='%s' resolved='%s' exists=True", raw_path, path)
+                    return path
+            
+            # If none exist, log all attempts and return the first one anyway
+            logger.warning("Chart path raw='%s' - none of these paths exist: %s", raw_path, possible_paths)
+            return possible_paths[0] if possible_paths else raw_path
 
         # Handle different result types
         if isinstance(result, str):
@@ -223,13 +246,42 @@ async def main(message: cl.Message):
             
             if chart_path:
                 resolved_path = _resolve_chart_path(chart_path)
+                
+                # If the resolved path doesn't exist, try to find the file by searching
+                if not os.path.exists(resolved_path):
+                    filename = os.path.basename(chart_path)
+                    logger.info("Searching for chart file: %s", filename)
+                    
+                    # Search in common directories
+                    search_dirs = [
+                        charts_dir,
+                        "/tmp/exports/charts",
+                        os.path.join(os.getcwd(), "exports", "charts"),
+                        "/tmp",
+                        os.getcwd()
+                    ]
+                    
+                    for search_dir in search_dirs:
+                        if os.path.exists(search_dir):
+                            for root, dirs, files in os.walk(search_dir):
+                                if filename in files:
+                                    resolved_path = os.path.join(root, filename)
+                                    logger.info("Found chart file at: %s", resolved_path)
+                                    break
+                            if os.path.exists(resolved_path):
+                                break
+                
                 if os.path.exists(resolved_path) and resolved_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
                     path = resolved_path
                     await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
                     logger.info("Sent chart from dict: %s", path)
                 else:
-                    logger.warning("Chart path in dict doesn't exist: %s", resolved_path)
-                    to_send_text = json.dumps(result, indent=2)
+                    logger.warning("Chart file not found after search. Tried path: %s", resolved_path)
+                    # List contents of charts_dir for debugging
+                    if os.path.exists(charts_dir):
+                        files = os.listdir(charts_dir)
+                        logger.info("Files in charts_dir (%s): %s", charts_dir, files)
+                    to_send_text = f"Chart generated but file not accessible: {chart_path}"
             elif "image_base64" in result:
                 # Handle base64 encoded images
                 fname = f"chart_{uuid.uuid4().hex[:8]}.png"
@@ -258,6 +310,7 @@ async def main(message: cl.Message):
         response_content = to_send_text or f"[Chart: {os.path.basename(path) if path else 'generated'}]"
         message_history.append({"role": "assistant", "content": response_content})
         cl.user_session.set("message_history", message_history)
+
     except Exception as e:
         logger.exception("Error in handler")
         err = (
