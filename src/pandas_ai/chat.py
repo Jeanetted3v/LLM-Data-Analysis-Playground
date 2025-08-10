@@ -6,10 +6,8 @@ Ref: https://mer.vin/2024/05/pandas-ai-database-excel-chainlit/
 Ref: https://www.youtube.com/watch?v=p53YfWZJt14
 """
 import logging
-import pandas as pd
 import json
 import chainlit as cl
-from pandasai import SmartDataframe
 import pandasai as pai
 from pandasai_litellm import LiteLLM
 import os
@@ -166,26 +164,63 @@ async def main(message: cl.Message):
         to_send_text = None
         path = None
 
-        if isinstance(result, str):
-            path = result.strip()
+        def _save_pil(img: PILImage.Image, base_dir):
+            fname = f"chart_{uuid.uuid4().hex[:8]}.png"
+            fpath = os.path.join(base_dir, fname)
+            img.save(fpath, format="PNG")
+            return fpath
 
-            # Normalize PandasAI's relative path to our /tmp charts dir
-            if path.startswith("exports/charts/"):
-                resolved = os.path.join(charts_dir, os.path.basename(path))
+        def _save_mpl(fig: Figure, base_dir):
+            fname = f"chart_{uuid.uuid4().hex[:8]}.png"
+            fpath = os.path.join(base_dir, fname)
+            fig.savefig(fpath, bbox_inches="tight")
+            return fpath
+
+        if isinstance(result, str):
+            raw = result.strip()
+            # Normalize PandasAI relative path -> /tmp charts dir
+            if raw.startswith("exports/charts/"):
+                resolved = os.path.join(charts_dir, os.path.basename(raw))
             else:
-                resolved = path if os.path.isabs(path) else os.path.join(os.getcwd(), path)
+                resolved = raw if os.path.isabs(raw) else os.path.join(os.getcwd(), raw)
 
             exists = os.path.exists(resolved)
-            logger.info("Chart path raw=%s resolved=%s exists=%s", path, resolved, exists)
+            logger.info("Chart path raw=%s resolved=%s exists=%s", raw, resolved, exists)
 
             if exists and resolved.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                await cl.Image(name=os.path.basename(resolved), path=resolved, display="inline").send()
+                path = resolved
+                await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
             else:
-                # Nothing found on disk: fall back to text
                 to_send_text = result or "(Empty response)"
 
+        elif isinstance(result, PILImage.Image):
+            path = _save_pil(result, charts_dir)
+            await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+
+        elif isinstance(result, Figure):
+            path = _save_mpl(result, charts_dir)
+            await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+
+        elif isinstance(result, dict):
+            # Common pattern: {"path": "..."} or {"image_base64": "..."}
+            if "path" in result and isinstance(result["path"], str):
+                raw = result["path"]
+                resolved = os.path.join(charts_dir, os.path.basename(raw)) if raw.startswith("exports/charts/") else raw
+                if os.path.exists(resolved) and resolved.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                    path = resolved
+                    await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+                else:
+                    to_send_text = json.dumps(result)
+            elif "image_base64" in result:
+                fname = f"chart_{uuid.uuid4().hex[:8]}.png"
+                path = os.path.join(charts_dir, fname)
+                with open(path, "wb") as f:
+                    f.write(base64.b64decode(result["image_base64"]))
+                await cl.Image(name=fname, path=path, display="inline").send()
+            else:
+                to_send_text = json.dumps(result)
+
         else:
-            # Non-string results: just show as text for now
             to_send_text = str(result) if result is not None else "(Empty response)"
 
         if to_send_text:
