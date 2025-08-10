@@ -176,61 +176,88 @@ async def main(message: cl.Message):
             fig.savefig(fpath, bbox_inches="tight")
             return fpath
 
+        def _resolve_chart_path(raw_path):
+            """Resolve and normalize chart paths from PandasAI"""
+            # Handle relative paths starting with exports/charts/
+            if raw_path.startswith("exports/charts/"):
+                # Use the configured charts_dir, not tempfile.gettempdir()
+                resolved = os.path.join(charts_dir, os.path.basename(raw_path))
+            else:
+                # Handle absolute paths or other relative paths
+                resolved = raw_path if os.path.isabs(raw_path) else os.path.join(os.getcwd(), raw_path)
+            
+            logger.info("Chart path raw='%s' resolved='%s' exists=%s", raw_path, resolved, os.path.exists(resolved))
+            return resolved
+
+        # Handle different result types
         if isinstance(result, str):
             raw = result.strip()
-            # Normalize PandasAI relative path -> /tmp charts dir
-            if raw.startswith("exports/charts/"):
-                resolved = os.path.join(charts_dir, os.path.basename(raw))
-            else:
-                resolved = raw if os.path.isabs(raw) else os.path.join(os.getcwd(), raw)
-
-            exists = os.path.exists(resolved)
-            logger.info("Chart path raw=%s resolved=%s exists=%s", raw, resolved, exists)
-
-            if exists and resolved.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                path = resolved
+            resolved_path = _resolve_chart_path(raw)
+            
+            if os.path.exists(resolved_path) and resolved_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                path = resolved_path
                 await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+                logger.info("Sent image: %s", path)
             else:
                 to_send_text = result or "(Empty response)"
 
         elif isinstance(result, PILImage.Image):
             path = _save_pil(result, charts_dir)
             await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+            logger.info("Sent PIL image: %s", path)
 
         elif isinstance(result, Figure):
             path = _save_mpl(result, charts_dir)
             await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+            logger.info("Sent matplotlib figure: %s", path)
 
         elif isinstance(result, dict):
-            # Common pattern: {"path": "..."} or {"image_base64": "..."}
-            if "path" in result and isinstance(result["path"], str):
-                raw = result["path"]
-                resolved = os.path.join(charts_dir, os.path.basename(raw)) if raw.startswith("exports/charts/") else raw
-                if os.path.exists(resolved) and resolved.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                    path = resolved
+            logger.info("Processing dict result with keys: %s", list(result.keys()))
+            
+            # Handle PandasAI's standard response format: {'type': 'plot', 'value': 'path'}
+            chart_path = None
+            if "value" in result and isinstance(result["value"], str):
+                chart_path = result["value"]
+            elif "path" in result and isinstance(result["path"], str):
+                chart_path = result["path"]
+            
+            if chart_path:
+                resolved_path = _resolve_chart_path(chart_path)
+                if os.path.exists(resolved_path) and resolved_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
+                    path = resolved_path
                     await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
+                    logger.info("Sent chart from dict: %s", path)
                 else:
-                    to_send_text = json.dumps(result)
+                    logger.warning("Chart path in dict doesn't exist: %s", resolved_path)
+                    to_send_text = json.dumps(result, indent=2)
             elif "image_base64" in result:
+                # Handle base64 encoded images
                 fname = f"chart_{uuid.uuid4().hex[:8]}.png"
                 path = os.path.join(charts_dir, fname)
-                with open(path, "wb") as f:
-                    f.write(base64.b64decode(result["image_base64"]))
-                await cl.Image(name=fname, path=path, display="inline").send()
+                try:
+                    with open(path, "wb") as f:
+                        f.write(base64.b64decode(result["image_base64"]))
+                    await cl.Image(name=fname, path=path, display="inline").send()
+                    logger.info("Sent base64 image: %s", path)
+                except Exception as e:
+                    logger.error("Failed to decode base64 image: %s", e)
+                    to_send_text = "Failed to decode chart image"
             else:
-                to_send_text = json.dumps(result)
+                # No recognizable image data
+                to_send_text = json.dumps(result, indent=2)
 
         else:
             to_send_text = str(result) if result is not None else "(Empty response)"
 
+        # Send text response if we have one
         if to_send_text:
             await cl.Message(content=to_send_text).send()
+            logger.info("Sent text response: %s", to_send_text[:100])
 
-
-        # Keep history consistent (use the same variable you used above)
-        message_history.append({"role": "assistant", "content": to_send_text or os.path.basename(path)})
+        # Update conversation history
+        response_content = to_send_text or f"[Chart: {os.path.basename(path) if path else 'generated'}]"
+        message_history.append({"role": "assistant", "content": response_content})
         cl.user_session.set("message_history", message_history)
-
     except Exception as e:
         logger.exception("Error in handler")
         err = (
