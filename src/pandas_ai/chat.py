@@ -207,13 +207,105 @@ async def main(message: cl.Message):
             raise RuntimeError("Model call timed out after 60s. Check outbound internet / VPC egress / API quotas.")
 
         logger.info("Result type: %s, content: %s", type(result).__name__, str(result)[:200])
+        
+        # Debug: Check what attributes the result object has
+        if hasattr(result, '__dict__'):
+            logger.info("Result attributes: %s", list(vars(result).keys()))
+        if hasattr(result, '__class__'):
+            logger.info("Result class: %s", result.__class__.__name__)
 
         # --- IMPROVED CHART HANDLING FOR GCP DEPLOYMENT ---
         to_send_text = None
         image_sent = False
 
         # Handle different result types with content-based approach
-        if isinstance(result, str):
+        # First check if it's a ChartResponse object or similar
+        if (hasattr(result, 'value') and hasattr(result, 'image')) or \
+           (hasattr(result, 'chart') or 'chart' in str(type(result)).lower() or 'response' in str(type(result)).lower()):
+            # This is likely a ChartResponse or similar object
+            logger.info("Handling ChartResponse-like object")
+            
+            # Method 1: Try to access the image attribute directly
+            image_obj = None
+            if hasattr(result, 'image'):
+                image_obj = result.image
+            elif hasattr(result, 'chart'):
+                image_obj = result.chart
+            elif hasattr(result, 'figure'):
+                image_obj = result.figure
+            
+            if image_obj is not None and isinstance(image_obj, (PILImage.Image, Figure)):
+                content_bytes = _convert_image_to_base64_content(image_obj)
+                if content_bytes:
+                    await cl.Image(
+                        name=f"chart_{uuid.uuid4().hex[:8]}.png",
+                        content=content_bytes,
+                        display="inline"
+                    ).send()
+                    
+                    # Optionally upload to GCS
+                    gcs_url, filename = await _upload_chart_to_gcs(content_bytes, bucket)
+                    image_sent = True
+                    logger.info("Sent chart from object.image attribute")
+            
+            # Method 2: Try the value/path approach if image method didn't work
+            if not image_sent:
+                chart_path = None
+                if hasattr(result, 'value'):
+                    chart_path = str(result.value)
+                elif hasattr(result, 'path'):
+                    chart_path = str(result.path)
+                elif hasattr(result, 'file_path'):
+                    chart_path = str(result.file_path)
+                
+                if chart_path:
+                    # Try multiple possible locations for the chart file
+                    possible_paths = [
+                        os.path.join(charts_dir, os.path.basename(chart_path)),
+                        os.path.join(os.getcwd(), chart_path),
+                        os.path.join("/tmp", chart_path),
+                        chart_path
+                    ]
+                    
+                    for path in possible_paths:
+                        if os.path.exists(path):
+                            content_bytes = _convert_image_to_base64_content(path)
+                            if content_bytes:
+                                await cl.Image(
+                                    name=f"chart_{uuid.uuid4().hex[:8]}.png",
+                                    content=content_bytes,
+                                    display="inline"
+                                ).send()
+                                image_sent = True
+                                logger.info("Sent chart from path: %s", path)
+                                break
+                    
+                    if not image_sent:
+                        to_send_text = f"Chart generated but not accessible: {chart_path}"
+                        logger.warning("Could not access chart file: %s", chart_path)
+                        
+                        # Debug: List files in charts directory
+                        if os.path.exists(charts_dir):
+                            files = os.listdir(charts_dir)
+                            logger.info("Files in charts_dir: %s", files[:10])  # Show first 10 files
+            
+            # Method 3: Try to convert the result object itself if it's image-like
+            if not image_sent:
+                try:
+                    # Sometimes the ChartResponse object can be converted directly
+                    content_bytes = _convert_image_to_base64_content(result)
+                    if content_bytes:
+                        await cl.Image(
+                            name=f"chart_{uuid.uuid4().hex[:8]}.png",
+                            content=content_bytes,
+                            display="inline"
+                        ).send()
+                        image_sent = True
+                        logger.info("Sent chart by converting result object directly")
+                except Exception as e:
+                    logger.info("Could not convert result object directly: %s", e)
+
+        elif isinstance(result, str):
             raw = result.strip()
             
             # Try to resolve as chart path first
