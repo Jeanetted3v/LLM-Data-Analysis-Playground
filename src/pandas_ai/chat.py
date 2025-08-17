@@ -1,10 +1,11 @@
-"""First draft of POC
+"""Fixed image handling for GCP deployment
 
-To run:
-chainlit run src/pandas_ai/chat.py
-Ref: https://mer.vin/2024/05/pandas-ai-database-excel-chainlit/
-Ref: https://www.youtube.com/watch?v=p53YfWZJt14
+Key changes:
+1. Convert images to base64 content for reliable display
+2. Upload charts back to GCS for persistent storage
+3. Use content bytes instead of file paths
 """
+
 import logging
 import json
 import chainlit as cl
@@ -21,10 +22,12 @@ import base64
 from google.cloud import storage
 from src.utils.settings import SETTINGS
 from hydra import compose, initialize
+import io
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("chainlit-app")
 
+# Initialize OpenAI API key
 if not SETTINGS.OPENAI_API_KEY:
     logger.error("OPENAI_API_KEY missing from SETTINGS")
 else:
@@ -32,9 +35,11 @@ else:
 os.environ["OPENAI_API_KEY"] = SETTINGS.OPENAI_API_KEY
 llm = LiteLLM(model="gpt-4.1-mini", request_timeout=45)
 
+# Create charts directory
 charts_dir = os.path.join(tempfile.gettempdir(), "exports", "charts")
 os.makedirs(charts_dir, exist_ok=True)
 
+# Configure PandasAI
 pai.config.set({
    "llm": llm,
    "temperature": 0,
@@ -50,12 +55,50 @@ logger.info("PandasAI config - charts_dir: %s", charts_dir)
 logger.info("Current working directory: %s", os.getcwd())
 logger.info("Charts directory exists: %s", os.path.exists(charts_dir))
 
+# Load Hydra configuration
 with initialize(version_base=None, config_path="../../config"):
     cfg = compose(config_name="config")
 
 BUCKET_NAME = "data_visualize_ai"
 CSV_PATH = "test_data_shopname_lower.csv"
 JSON_PATH = "test_data_columns.json"
+
+def _convert_image_to_base64_content(image_path_or_object):
+    """Convert image to base64 content bytes for reliable display"""
+    try:
+        if isinstance(image_path_or_object, str):
+            # Handle file path
+            with open(image_path_or_object, "rb") as f:
+                return f.read()
+        elif isinstance(image_path_or_object, PILImage.Image):
+            # Handle PIL Image
+            img_buffer = io.BytesIO()
+            image_path_or_object.save(img_buffer, format='PNG')
+            return img_buffer.getvalue()
+        elif isinstance(image_path_or_object, Figure):
+            # Handle matplotlib Figure
+            img_buffer = io.BytesIO()
+            image_path_or_object.savefig(img_buffer, format='png', bbox_inches='tight')
+            return img_buffer.getvalue()
+    except Exception as e:
+        logger.error("Failed to convert image to content: %s", e)
+        return None
+
+async def _upload_chart_to_gcs(content_bytes, bucket, filename_prefix="chart"):
+    """Upload chart to GCS for persistent storage"""
+    try:
+        filename = f"{filename_prefix}_{uuid.uuid4().hex[:8]}.png"
+        blob = bucket.blob(f"generated_charts/{filename}")
+        blob.upload_from_string(content_bytes, content_type='image/png')
+        
+        # Make blob publicly readable (optional, for direct URL access)
+        blob.make_public()
+        
+        logger.info("Uploaded chart to GCS: %s", filename)
+        return blob.public_url, filename
+    except Exception as e:
+        logger.error("Failed to upload chart to GCS: %s", e)
+        return None, None
 
 @cl.on_chat_start
 def start_chat():
@@ -88,6 +131,8 @@ async def main(message: cl.Message):
         logger.info("Using bucket: %s", bucket_name)
         bucket = storage_client.bucket(bucket_name)
 
+        # ... (keep your existing data loading code) ...
+        
         # Local tmp paths
         temp_csv_path = "/tmp/test_data.csv"
         temp_json_path = "/tmp/columns.json"
@@ -122,13 +167,11 @@ async def main(message: cl.Message):
         # Build/Reuse PandasAI DataFrame ONCE per session
         pandasai_df = cl.user_session.get("pandasai_df")
         if pandasai_df is None:
-            # Create the dataset (with schema) only once
             dataset = pai.create(
                 path="my-org/companies",
                 df=csv_df,
                 description="Sales data from our retail stores",
                 columns=columns,
-                # force=True  # uncomment if you want to overwrite an existing registry entry
             )
             pandasai_df = pai.DataFrame(dataset, config={"llm": llm})
             cl.user_session.set("pandasai_df", pandasai_df)
@@ -136,7 +179,6 @@ async def main(message: cl.Message):
         else:
             logger.info("Reusing PandasAI DataFrame from session.")
         df = pandasai_df
-        logger.info("PandasAI DataFrame created.")
 
         # Prompt
         message_history = cl.user_session.get("message_history")
@@ -149,7 +191,7 @@ async def main(message: cl.Message):
         await cl.Message("Calling the model…").send()
         logger.info("Calling df.chat()…")
 
-        # Run df.chat in a worker with timeout so it can't hang forever
+        # Run df.chat in a worker with timeout
         loop = asyncio.get_running_loop()
 
         def _call_chat():
@@ -166,134 +208,134 @@ async def main(message: cl.Message):
 
         logger.info("Result type: %s, content: %s", type(result).__name__, str(result)[:200])
 
-        # --- Handle charts vs text ---
+        # --- IMPROVED CHART HANDLING FOR GCP DEPLOYMENT ---
         to_send_text = None
-        path = None
+        image_sent = False
 
-        def _save_pil(img: PILImage.Image, base_dir):
-            fname = f"chart_{uuid.uuid4().hex[:8]}.png"
-            fpath = os.path.join(base_dir, fname)
-            img.save(fpath, format="PNG")
-            return fpath
-
-        def _save_mpl(fig: Figure, base_dir):
-            fname = f"chart_{uuid.uuid4().hex[:8]}.png"
-            fpath = os.path.join(base_dir, fname)
-            fig.savefig(fpath, bbox_inches="tight")
-            return fpath
-
-        def _resolve_chart_path(raw_path):
-            """Resolve and normalize chart paths from PandasAI"""
-            possible_paths = []
-            
-            # Handle relative paths starting with exports/charts/
-            if raw_path.startswith("exports/charts/"):
-                filename = os.path.basename(raw_path)
-                # Try multiple possible locations
-                possible_paths = [
-                    os.path.join(charts_dir, filename),  # Our configured temp dir
-                    os.path.join(os.getcwd(), raw_path),  # Relative to current working dir
-                    os.path.join("/tmp", raw_path),  # Common temp location
-                    raw_path,  # Try the raw path as-is
-                ]
-            else:
-                # Handle absolute paths or other relative paths
-                possible_paths = [
-                    raw_path if os.path.isabs(raw_path) else os.path.join(os.getcwd(), raw_path)
-                ]
-            
-            # Find the first path that exists
-            for path in possible_paths:
-                if os.path.exists(path):
-                    logger.info("Chart path raw='%s' resolved='%s' exists=True", raw_path, path)
-                    return path
-            
-            # If none exist, log all attempts and return the first one anyway
-            logger.warning("Chart path raw='%s' - none of these paths exist: %s", raw_path, possible_paths)
-            return possible_paths[0] if possible_paths else raw_path
-
-        # Handle different result types
+        # Handle different result types with content-based approach
         if isinstance(result, str):
             raw = result.strip()
-            resolved_path = _resolve_chart_path(raw)
             
-            if os.path.exists(resolved_path) and resolved_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                path = resolved_path
-                await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
-                logger.info("Sent image: %s", path)
+            # Try to resolve as chart path first
+            resolved_path = None
+            if raw.startswith("exports/charts/") or raw.endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                # Try multiple possible locations
+                possible_paths = [
+                    os.path.join(charts_dir, os.path.basename(raw)),
+                    os.path.join(os.getcwd(), raw) if not os.path.isabs(raw) else raw,
+                    os.path.join("/tmp", raw),
+                    raw
+                ]
+                
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        resolved_path = path
+                        break
+            
+            if resolved_path and os.path.exists(resolved_path):
+                # Convert to content bytes for reliable display
+                content_bytes = _convert_image_to_base64_content(resolved_path)
+                if content_bytes:
+                    # Option 1: Use content bytes directly (recommended for deployment)
+                    await cl.Image(
+                        name=f"chart_{uuid.uuid4().hex[:8]}.png",
+                        content=content_bytes,
+                        display="inline"
+                    ).send()
+                    
+                    # Option 2: Also upload to GCS for persistence (optional)
+                    gcs_url, filename = await _upload_chart_to_gcs(content_bytes, bucket)
+                    if gcs_url:
+                        logger.info("Chart also available at: %s", gcs_url)
+                    
+                    image_sent = True
+                    logger.info("Sent image from path: %s", resolved_path)
             else:
                 to_send_text = result or "(Empty response)"
 
         elif isinstance(result, PILImage.Image):
-            path = _save_pil(result, charts_dir)
-            await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
-            logger.info("Sent PIL image: %s", path)
+            # Handle PIL Image directly
+            content_bytes = _convert_image_to_base64_content(result)
+            if content_bytes:
+                await cl.Image(
+                    name=f"chart_{uuid.uuid4().hex[:8]}.png",
+                    content=content_bytes,
+                    display="inline"
+                ).send()
+                
+                # Optionally upload to GCS
+                gcs_url, filename = await _upload_chart_to_gcs(content_bytes, bucket)
+                image_sent = True
+                logger.info("Sent PIL image")
 
         elif isinstance(result, Figure):
-            path = _save_mpl(result, charts_dir)
-            await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
-            logger.info("Sent matplotlib figure: %s", path)
+            # Handle matplotlib Figure directly
+            content_bytes = _convert_image_to_base64_content(result)
+            if content_bytes:
+                await cl.Image(
+                    name=f"chart_{uuid.uuid4().hex[:8]}.png",
+                    content=content_bytes,
+                    display="inline"
+                ).send()
+                
+                # Optionally upload to GCS
+                gcs_url, filename = await _upload_chart_to_gcs(content_bytes, bucket)
+                image_sent = True
+                logger.info("Sent matplotlib figure")
 
         elif isinstance(result, dict):
             logger.info("Processing dict result with keys: %s", list(result.keys()))
             
-            # Handle PandasAI's standard response format: {'type': 'plot', 'value': 'path'}
-            chart_path = None
-            if "value" in result and isinstance(result["value"], str):
-                chart_path = result["value"]
-            elif "path" in result and isinstance(result["path"], str):
-                chart_path = result["path"]
-            
-            if chart_path:
-                resolved_path = _resolve_chart_path(chart_path)
-                
-                # If the resolved path doesn't exist, try to find the file by searching
-                if not os.path.exists(resolved_path):
-                    filename = os.path.basename(chart_path)
-                    logger.info("Searching for chart file: %s", filename)
-                    
-                    # Search in common directories
-                    search_dirs = [
-                        charts_dir,
-                        "/tmp/exports/charts",
-                        os.path.join(os.getcwd(), "exports", "charts"),
-                        "/tmp",
-                        os.getcwd()
-                    ]
-                    
-                    for search_dir in search_dirs:
-                        if os.path.exists(search_dir):
-                            for root, dirs, files in os.walk(search_dir):
-                                if filename in files:
-                                    resolved_path = os.path.join(root, filename)
-                                    logger.info("Found chart file at: %s", resolved_path)
-                                    break
-                            if os.path.exists(resolved_path):
-                                break
-                
-                if os.path.exists(resolved_path) and resolved_path.lower().endswith((".png", ".jpg", ".jpeg", ".gif")):
-                    path = resolved_path
-                    await cl.Image(name=os.path.basename(path), path=path, display="inline").send()
-                    logger.info("Sent chart from dict: %s", path)
-                else:
-                    logger.warning("Chart file not found after search. Tried path: %s", resolved_path)
-                    # List contents of charts_dir for debugging
-                    if os.path.exists(charts_dir):
-                        files = os.listdir(charts_dir)
-                        logger.info("Files in charts_dir (%s): %s", charts_dir, files)
-                    to_send_text = f"Chart generated but file not accessible: {chart_path}"
-            elif "image_base64" in result:
-                # Handle base64 encoded images
-                fname = f"chart_{uuid.uuid4().hex[:8]}.png"
-                path = os.path.join(charts_dir, fname)
+            # Handle various dict formats
+            if "image_base64" in result:
+                # Direct base64 image
                 try:
-                    with open(path, "wb") as f:
-                        f.write(base64.b64decode(result["image_base64"]))
-                    await cl.Image(name=fname, path=path, display="inline").send()
-                    logger.info("Sent base64 image: %s", path)
+                    content_bytes = base64.b64decode(result["image_base64"])
+                    await cl.Image(
+                        name=f"chart_{uuid.uuid4().hex[:8]}.png",
+                        content=content_bytes,
+                        display="inline"
+                    ).send()
+                    image_sent = True
+                    logger.info("Sent base64 image from dict")
                 except Exception as e:
                     logger.error("Failed to decode base64 image: %s", e)
                     to_send_text = "Failed to decode chart image"
+            
+            elif "value" in result or "path" in result:
+                # Handle path-based results
+                chart_path = result.get("value") or result.get("path")
+                if chart_path and isinstance(chart_path, str):
+                    # Try to find and load the file
+                    search_paths = [
+                        os.path.join(charts_dir, os.path.basename(chart_path)),
+                        chart_path,
+                        os.path.join("/tmp", chart_path),
+                        os.path.join("/tmp/exports/charts", os.path.basename(chart_path))
+                    ]
+                    
+                    chart_found = False
+                    for search_path in search_paths:
+                        if os.path.exists(search_path):
+                            content_bytes = _convert_image_to_base64_content(search_path)
+                            if content_bytes:
+                                await cl.Image(
+                                    name=os.path.basename(search_path),
+                                    content=content_bytes,
+                                    display="inline"
+                                ).send()
+                                image_sent = True
+                                chart_found = True
+                                logger.info("Sent chart from dict path: %s", search_path)
+                                break
+                    
+                    if not chart_found:
+                        to_send_text = f"Chart generated but file not accessible: {chart_path}"
+                        
+                        # Debug: list available files
+                        if os.path.exists(charts_dir):
+                            files = os.listdir(charts_dir)
+                            logger.info("Files in charts_dir (%s): %s", charts_dir, files)
             else:
                 # No recognizable image data
                 to_send_text = json.dumps(result, indent=2)
@@ -301,13 +343,13 @@ async def main(message: cl.Message):
         else:
             to_send_text = str(result) if result is not None else "(Empty response)"
 
-        # Send text response if we have one
+        # Send text response if we have one and no image was sent
         if to_send_text:
             await cl.Message(content=to_send_text).send()
             logger.info("Sent text response: %s", to_send_text[:100])
 
         # Update conversation history
-        response_content = to_send_text or f"[Chart: {os.path.basename(path) if path else 'generated'}]"
+        response_content = to_send_text or "[Chart generated and displayed]"
         message_history.append({"role": "assistant", "content": response_content})
         cl.user_session.set("message_history", message_history)
 
